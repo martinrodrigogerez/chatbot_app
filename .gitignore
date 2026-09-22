@@ -3,6 +3,9 @@
 .env.*
 .streamlit/secrets.toml
 
+# Documentación personal, no forma parte del repo del proyecto
+CONCEPTOS_BASICOS.md
+
 # Python
 __pycache__/
 *.pyc
