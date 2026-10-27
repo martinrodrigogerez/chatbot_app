@@ -4,9 +4,11 @@ import streamlit as st
 from langchain_core.messages import AIMessage
 
 from chatbot.chains import crear_cadena
-from chatbot.config import cargar_google_api_key
+from chatbot.config import cargar_configuracion, cargar_google_api_key
 from chatbot.conversation_store import ConversationStore
 from chatbot.llm_factory import MODELOS_DISPONIBLES, crear_chat_model
+
+cargar_configuracion(Path(__file__).resolve().parent)
 
 APP_ICON = "🤖"
 APP_TITULO = "ChatBot Pro"
@@ -45,7 +47,7 @@ if not st.user.is_logged_in:
 st.title(f"{APP_ICON} {APP_TITULO}")
 st.caption("Chatbot de ejemplo construido con LangChain y Google Generative AI.")
 
-google_api_key = cargar_google_api_key(Path(__file__).resolve().parent)
+google_api_key = cargar_google_api_key()
 store = ConversationStore(user_id=st.user.sub)
 
 # --- Sidebar de configuración ---

@@ -1,6 +1,7 @@
 # Secrets
 .env
 .env.*
+!.env.*.example
 .streamlit/secrets.toml
 
 # Documentación personal, no forma parte del repo del proyecto

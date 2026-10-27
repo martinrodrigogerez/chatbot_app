@@ -1,25 +1,28 @@
 """Repository de conversaciones: encapsula DÓNDE y CÓMO se guarda el
 historial de chats.
 
-Persiste en Supabase (tabla "conversaciones"), particionado por user_id (el
+Persiste en Postgres (tabla "conversaciones"), particionado por user_id (el
 "sub" de Auth0), para que el historial sobreviva a reinicios del servidor y
 cada usuario vea solo el suyo. El resto de la app (sidebar, chat) sigue
 llamando a store.actual, store.nueva(), store.agregar_turno(...) sin
 enterarse de dónde vive realmente el dato.
 """
 
+import psycopg2.extras
 from langchain_core.messages import AIMessage, HumanMessage
 
-from chatbot.supabase_client import obtener_cliente_supabase
+from chatbot.db_client import obtener_conexion
 
 TITULO_POR_DEFECTO = "Nueva conversación"
 
 
 def _mensajes_a_json(historial):
-    return [
-        {"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content}
-        for m in historial
-    ]
+    return psycopg2.extras.Json(
+        [
+            {"role": "assistant" if isinstance(m, AIMessage) else "user", "content": m.content}
+            for m in historial
+        ]
+    )
 
 
 def _json_a_mensajes(historial_json):
@@ -33,35 +36,43 @@ def _json_a_mensajes(historial_json):
 class ConversationStore:
     def __init__(self, user_id: str):
         self._user_id = user_id
-        self._db = obtener_cliente_supabase()
+        self._db = obtener_conexion()
         self._cargar()
 
     def _cargar(self) -> None:
         """Trae del más viejo al más nuevo, igual que crecía el dict en
         session_state, para que listar() (que hace reversed()) muestre el
         más reciente primero."""
-        respuesta = (
-            self._db.table("conversaciones")
-            .select("id, titulo, historial")
-            .eq("user_id", self._user_id)
-            .order("created_at", desc=False)
-            .execute()
-        )
-        filas = respuesta.data or [self._crear_fila()]
+        with self._db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                select id, titulo, historial
+                from conversaciones
+                where user_id = %s
+                order by created_at asc
+                """,
+                (self._user_id,),
+            )
+            filas = cur.fetchall() or [self._crear_fila()]
+
         self._conversaciones = {
-            fila["id"]: {"titulo": fila["titulo"], "historial": _json_a_mensajes(fila["historial"])}
+            str(fila["id"]): {"titulo": fila["titulo"], "historial": _json_a_mensajes(fila["historial"])}
             for fila in filas
         }
         # Al entrar, la conversación "actual" es la más reciente.
-        self._actual_id = filas[-1]["id"]
+        self._actual_id = str(filas[-1]["id"])
 
     def _crear_fila(self) -> dict:
-        respuesta = (
-            self._db.table("conversaciones")
-            .insert({"user_id": self._user_id, "titulo": TITULO_POR_DEFECTO, "historial": []})
-            .execute()
-        )
-        return respuesta.data[0]
+        with self._db.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(
+                """
+                insert into conversaciones (user_id, titulo, historial)
+                values (%s, %s, %s)
+                returning id, titulo, historial
+                """,
+                (self._user_id, TITULO_POR_DEFECTO, _mensajes_a_json([])),
+            )
+            return cur.fetchone()
 
     @property
     def actual(self) -> dict:
@@ -82,8 +93,8 @@ class ConversationStore:
         # Si ya estamos parados en una conversación vacía, no creamos otra al lado.
         if self.actual["historial"]:
             fila = self._crear_fila()
-            self._conversaciones[fila["id"]] = {"titulo": fila["titulo"], "historial": []}
-            self._actual_id = fila["id"]
+            self._conversaciones[str(fila["id"])] = {"titulo": fila["titulo"], "historial": []}
+            self._actual_id = str(fila["id"])
 
     def agregar_turno(self, pregunta: str, respuesta: str) -> bool:
         """Guarda el turno de pregunta/respuesta en la conversación activa.
@@ -102,9 +113,15 @@ class ConversationStore:
         conv["historial"].append(HumanMessage(content=pregunta))
         conv["historial"].append(AIMessage(content=respuesta))
 
-        self._db.table("conversaciones").update(
-            {"titulo": conv["titulo"], "historial": _mensajes_a_json(conv["historial"])}
-        ).eq("id", self._actual_id).execute()
+        with self._db.cursor() as cur:
+            cur.execute(
+                """
+                update conversaciones
+                set titulo = %s, historial = %s, updated_at = now()
+                where id = %s
+                """,
+                (conv["titulo"], _mensajes_a_json(conv["historial"]), self._actual_id),
+            )
 
         return titulo_cambio
 

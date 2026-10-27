@@ -1,20 +1,25 @@
-"""Carga de configuración desde .env (local) o st.secrets (Streamlit Cloud)."""
+"""Carga de configuración: variables de entorno primero (así funciona igual
+en Docker, donde docker-compose las inyecta), con .env local y st.secrets
+como fallback para desarrollo."""
 
+import os
 from pathlib import Path
 
-from dotenv import dotenv_values
+from dotenv import load_dotenv
 
 
-def cargar_google_api_key(carpeta_proyecto: Path) -> str:
-    """Lee GEMINI_API_KEY del .env local o, si no existe, de st.secrets.
+def cargar_configuracion(carpeta_proyecto: Path) -> None:
+    """Completa os.environ con lo que haya en el .env local, sin pisar
+    variables que ya vinieran inyectadas (p. ej. por docker-compose). En el
+    contenedor el .env no existe y esto es un no-op silencioso."""
+    load_dotenv(carpeta_proyecto / ".env", override=False)
 
-    En Streamlit Community Cloud no hay archivo .env (está en .gitignore),
-    las claves se cargan ahí vía el panel de Secrets y se leen con
-    st.secrets. Centralizar esto acá evita repetir la lectura en cada
-    script y deja un único lugar donde cambiar la fuente de configuración.
-    """
-    config = dotenv_values(carpeta_proyecto / ".env")
-    api_key = config.get("GEMINI_API_KEY")
+
+def cargar_google_api_key() -> str:
+    """Lee GEMINI_API_KEY de las variables de entorno (ya sea inyectadas
+    por Docker o cargadas desde el .env local) o, como último recurso, de
+    st.secrets (Streamlit Community Cloud)."""
+    api_key = os.environ.get("GEMINI_API_KEY")
 
     if not api_key:
         import streamlit as st
@@ -23,6 +28,7 @@ def cargar_google_api_key(carpeta_proyecto: Path) -> str:
 
     if not api_key:
         raise RuntimeError(
-            "Falta GEMINI_API_KEY: agregala al .env local o a los Secrets de Streamlit Cloud."
+            "Falta GEMINI_API_KEY: agregala al .env local, a las variables "
+            "de entorno del contenedor o a los Secrets de Streamlit Cloud."
         )
     return api_key
